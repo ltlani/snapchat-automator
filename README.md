@@ -14,6 +14,8 @@ Creates a simple camera Snap and sends it to your chosen Snapchat Web conversati
 
 Console commands: `status`, `preview "Friend Name"`, `manual-send`, `resolve "Friend Name" sent|not-sent`, `help`, and `stop`. `manual-send` ignores the timer and sends to everyone now, but it will not repeat a send whose outcome is uncertain. `python scripts/manual-send.py` does the same thing from a shell inside the container.
 
+For a trusted HTTPS domain, set the egg's optional `BROWSER_PUBLIC_URL` startup variable to an origin such as `https://snapchat.ouadielaachkar.com`. The console then uses that address, and the viewer serves plain HTTP internally for Nginx to proxy. Keep the backend allocation firewalled, use WebSocket upgrade headers, and secure the public Nginx site with Certbot. The viewer still requires its startup password. The initial Nginx configuration is in `deploy/snapchat.ouadielaachkar.com.conf`; Certbot adds HTTPS and the redirect after DNS points to the server.
+
 `preview "Friend Name"` captures a preview in `.runtime/last-preview.png` without sending anything. Use `resolve "Friend Name" sent` only after checking that an uncertain Snap was delivered; it records the send time. Use `not-sent` after confirming it was not delivered; it clears the pause so the next due check can try again. Neither `resolve` option sends a Snap itself.
 
 If your egg does not forward console input, temporarily use `python -u main.py login` or `python -u scripts/manual-send.py` as its startup command for that action, then switch back to `python -u main.py run`.

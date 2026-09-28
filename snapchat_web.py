@@ -25,6 +25,18 @@ class SenderError(RuntimeError):
 
 
 def browser_view_url():
+    public_url = os.environ.get("BROWSER_PUBLIC_URL", "").strip()
+    if public_url:
+        try:
+            origin = urlsplit(public_url)
+            if (origin.scheme != "https" or not origin.hostname or origin.username is not None
+                    or origin.password is not None or origin.path not in ("", "/")
+                    or origin.query or origin.fragment or origin.port == 0
+                    or any(char.isspace() for char in public_url)):
+                return ""
+        except ValueError:
+            return ""
+        return f"{public_url.rstrip('/')}/vnc.html?autoconnect=1&resize=scale"
     port = os.environ.get("SERVER_PORT", "")
     if not port.isdigit() or not 1 <= int(port) <= 65535:
         return ""

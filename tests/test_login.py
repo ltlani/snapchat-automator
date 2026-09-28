@@ -7,6 +7,21 @@ from snapchat_web import browser_view_url, show_login_instructions
 
 
 class LoginTests(unittest.TestCase):
+    def test_reverse_proxy_url(self):
+        for origin in ("https://snapchat.ouadielaachkar.com", "https://snapchat.ouadielaachkar.com/"):
+            with patch.dict("os.environ", {"BROWSER_PUBLIC_URL": origin}, clear=True):
+                with patch("snapchat_web.urlopen") as request:
+                    self.assertEqual(browser_view_url(), "https://snapchat.ouadielaachkar.com/vnc.html?autoconnect=1&resize=scale")
+                    request.assert_not_called()
+
+    def test_invalid_reverse_proxy_urls(self):
+        for origin in ("http://example.test", "https:///", "https://user:password@example.test",
+                       "https://example.test/path", "https://example.test?query=1",
+                       "https://example.test#fragment", "https://example.test:99999",
+                       "https://example.test:0", "https://exam ple.test"):
+            with patch.dict("os.environ", {"BROWSER_PUBLIC_URL": origin}, clear=True):
+                self.assertEqual(browser_view_url(), "")
+
     def test_public_allocation(self):
         with patch.dict("os.environ", {"SERVER_IP": "89.28.205.45", "SERVER_PORT": "2011"}, clear=True):
             with patch("snapchat_web.urlopen") as request:

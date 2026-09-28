@@ -34,20 +34,29 @@ if [ -n "${SERVER_PORT:-}" ]; then
     case "$SERVER_PORT" in
         *[!0-9]*|'') echo "SERVER_PORT must be a number." >&2; exit 1 ;;
     esac
+    export BROWSER_VIEW_URL="$(python -c 'from snapchat_web import browser_view_url; print(browser_view_url())')"
+    if [ -n "${BROWSER_PUBLIC_URL:-}" ] && [ -z "$BROWSER_VIEW_URL" ]; then
+        echo "BROWSER_PUBLIC_URL must be an HTTPS origin, such as https://snapchat.example.com." >&2
+        exit 1
+    fi
 
     umask 077
     vnc_dir="$(mktemp -d)"
     vnc_password="$(python -c 'import secrets, string; print("".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(8)))')"
     vnc_port="$(python -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')"
     x11vnc -storepasswd "$vnc_password" "$vnc_dir/password" >/dev/null 2>&1
-    openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
-        -subj "/CN=Snapchat Browser" \
-        -keyout "$vnc_dir/key.pem" -out "$vnc_dir/cert.pem" >/dev/null 2>&1
+    tls_options=()
+    if [ -z "${BROWSER_PUBLIC_URL:-}" ]; then
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 \
+            -subj "/CN=Snapchat Browser" \
+            -keyout "$vnc_dir/key.pem" -out "$vnc_dir/cert.pem" >/dev/null 2>&1
+        tls_options=(--ssl-only --cert="$vnc_dir/cert.pem" --key="$vnc_dir/key.pem")
+    fi
 
     x11vnc -display "$DISPLAY" -localhost -forever -shared -noxdamage \
         -rfbauth "$vnc_dir/password" -rfbport "$vnc_port" >/dev/null 2>&1 &
     vnc_pid=$!
-    websockify --ssl-only --cert="$vnc_dir/cert.pem" --key="$vnc_dir/key.pem" \
+    websockify "${tls_options[@]}" \
         --web=/usr/share/novnc "0.0.0.0:$SERVER_PORT" "127.0.0.1:$vnc_port" >/dev/null 2>&1 &
     web_pid=$!
     sleep 1
@@ -57,14 +66,17 @@ if [ -n "${SERVER_PORT:-}" ]; then
     fi
 
     export BROWSER_VIEW_PASSWORD="$vnc_password"
-    export BROWSER_VIEW_URL="$(python -c 'from snapchat_web import browser_view_url; print(browser_view_url())')"
     if [ -n "$BROWSER_VIEW_URL" ]; then
         echo "Browser view: $BROWSER_VIEW_URL"
     else
         echo "Could not detect the public IP. Open https://YOUR_NODE_IP:$SERVER_PORT/vnc.html."
     fi
     echo "Browser password for this startup: $vnc_password"
-    echo "The HTTPS certificate is self-signed. Keep this allocation private."
+    if [ -n "${BROWSER_PUBLIC_URL:-}" ]; then
+        echo "HTTPS is handled by the reverse proxy. Keep the backend allocation private."
+    else
+        echo "The HTTPS certificate is self-signed. Keep this allocation private."
+    fi
 fi
 
 read -r -a startup <<< "${STARTUP:-python -u main.py run}"
