@@ -9,10 +9,12 @@ Creates a simple camera Snap and sends it to your chosen Snapchat Web conversati
 3. Start once. The container creates `settings.py` and exits. In the Pterodactyl file manager, add friends as `("Exact display name", "conversation ID")` entries in `FRIENDS`. Find each ID after `/web/` in that friend's Snapchat Web URL. Set `HOURS`, `HEADLESS`, and `IMAGE` if needed, then start again.
 
    For example: `FRIENDS = [("Alice", "conversation-id-from-url")]`. Replace both example values with the real ones.
-4. The console prints a browser-view URL and a new password each startup. Open the HTTPS URL, accept its self-signed certificate, and type `login` in the Pterodactyl console. Sign in to Snapchat in that browser view. The Linux login is saved under `.runtime/chrome-profile`.
+4. Type `login` in the Pterodactyl console. It prints a direct login-view link and password. Open the link on your own device, verify it is your server, and sign in to Snapchat there. The console confirms when the login is saved under `.runtime/chrome-profile`; you can then close the tab. The link uses `SERVER_IP` automatically, or detects the node's public IP through `api.ipify.org` if the allocation is a wildcard/private address. The HTTPS certificate is self-signed and the viewer password changes each startup. Snapchat Web still needs this browser sign-in; Snapchat's Login Kit does not grant access to chats or Snaps.
 5. Type `preview "Exact display name"` to check the Snap without sending, then open `.runtime/last-preview.png` in the file manager. The next automatic check runs within five minutes; friends with no saved send time are immediately due. Leave the server running and restart it after changing `settings.py`.
 
 Console commands: `status`, `preview "Friend Name"`, `manual-send`, `resolve "Friend Name" sent|not-sent`, `help`, and `stop`. `manual-send` ignores the timer and sends to everyone now, but it will not repeat a send whose outcome is uncertain. `python scripts/manual-send.py` does the same thing from a shell inside the container.
+
+`preview "Friend Name"` captures a preview in `.runtime/last-preview.png` without sending anything. Use `resolve "Friend Name" sent` only after checking that an uncertain Snap was delivered; it records the send time. Use `not-sent` after confirming it was not delivered; it clears the pause so the next due check can try again. Neither `resolve` option sends a Snap itself.
 
 If your egg does not forward console input, temporarily use `python -u main.py login` or `python -u scripts/manual-send.py` as its startup command for that action, then switch back to `python -u main.py run`.
 

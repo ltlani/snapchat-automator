@@ -45,7 +45,7 @@ if [ -n "${SERVER_PORT:-}" ]; then
         -keyout "$vnc_dir/key.pem" -out "$vnc_dir/cert.pem" >/dev/null 2>&1
 
     x11vnc -display "$DISPLAY" -localhost -forever -shared -noxdamage \
-        -disablefiletransfer -rfbauth "$vnc_dir/password" -rfbport "$vnc_port" >/dev/null 2>&1 &
+        -rfbauth "$vnc_dir/password" -rfbport "$vnc_port" >/dev/null 2>&1 &
     vnc_pid=$!
     websockify --ssl-only --cert="$vnc_dir/cert.pem" --key="$vnc_dir/key.pem" \
         --web=/usr/share/novnc "0.0.0.0:$SERVER_PORT" "127.0.0.1:$vnc_port" >/dev/null 2>&1 &
@@ -56,7 +56,13 @@ if [ -n "${SERVER_PORT:-}" ]; then
         exit 1
     fi
 
-    echo "Browser view: https://<your-server-allocation>:$SERVER_PORT/vnc.html"
+    export BROWSER_VIEW_PASSWORD="$vnc_password"
+    export BROWSER_VIEW_URL="$(python -c 'from snapchat_web import browser_view_url; print(browser_view_url())')"
+    if [ -n "$BROWSER_VIEW_URL" ]; then
+        echo "Browser view: $BROWSER_VIEW_URL"
+    else
+        echo "Could not detect the public IP. Open https://YOUR_NODE_IP:$SERVER_PORT/vnc.html."
+    fi
     echo "Browser password for this startup: $vnc_password"
     echo "The HTTPS certificate is self-signed. Keep this allocation private."
 fi

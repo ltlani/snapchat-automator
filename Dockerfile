@@ -7,9 +7,15 @@ RUN apt-get update \
 
 COPY requirements.txt /tmp/snapchat-requirements.txt
 RUN python -m pip install --no-cache-dir -r /tmp/snapchat-requirements.txt \
-    && python -m playwright install chrome \
-    && (id pwuser >/dev/null 2>&1 && userdel -r pwuser || true) \
-    && useradd --uid 1000 --create-home --home-dir /home/container --shell /bin/bash container
+    && python -m playwright install chrome
+
+RUN if getent passwd 1000 >/dev/null; then \
+        usermod --login container --home /home/container --move-home --shell /bin/bash "$(getent passwd 1000 | cut -d: -f1)"; \
+    else \
+        useradd --uid 1000 --create-home --home-dir /home/container --shell /bin/bash container; \
+    fi \
+    && if ! getent group container >/dev/null; then groupadd container; fi \
+    && usermod --gid container container
 
 COPY --chown=container:container . /opt/snapchat-automator
 COPY entrypoint.sh /entrypoint.sh

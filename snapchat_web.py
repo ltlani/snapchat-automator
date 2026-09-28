@@ -5,10 +5,13 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 from io import BytesIO
 import json
+import ipaddress
 import logging
+import os
 from pathlib import Path
 import sys
 from urllib.parse import urlsplit
+from urllib.request import urlopen
 
 from PIL import Image, ImageOps
 
@@ -19,6 +22,33 @@ LOG = logging.getLogger("snapchat")
 
 class SenderError(RuntimeError):
     pass
+
+
+def browser_view_url():
+    port = os.environ.get("SERVER_PORT", "")
+    if not port.isdigit() or not 1 <= int(port) <= 65535:
+        return ""
+    try:
+        address = ipaddress.ip_address(os.environ.get("SERVER_IP") or "0.0.0.0")
+        if not address.is_global:
+            with urlopen("https://api.ipify.org", timeout=5) as response:
+                address = ipaddress.ip_address(response.read(64).decode().strip())
+            if not address.is_global:
+                return ""
+    except (OSError, ValueError):
+        return ""
+    host = f"[{address}]" if address.version == 6 else str(address)
+    return f"https://{host}:{port}/vnc.html?autoconnect=1&resize=scale"
+
+
+def show_login_instructions():
+    url = os.environ.get("BROWSER_VIEW_URL")
+    if url:
+        print(f"Open this login link in your own browser: {url}", flush=True)
+        print(f"Browser password: {os.environ['BROWSER_VIEW_PASSWORD']}", flush=True)
+        print("Sign in to Snapchat there. This console will confirm when the login is saved.", flush=True)
+    else:
+        print("Sign in to Snapchat in the Chrome window. Waiting for login...", flush=True)
 
 
 def load_json(path, default=None):
@@ -200,6 +230,8 @@ def chrome_user_agent(playwright):
 
 def run_browser(config, command, state):
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+    if command == "login":
+        show_login_instructions()
     profile = RUNTIME / "chrome-profile"
     with sync_playwright() as playwright:
         headless = command != "login" and config.get("headless", True)
@@ -221,8 +253,8 @@ def run_browser(config, command, state):
             page.set_default_timeout(30000)
             if command == "login":
                 page.goto("https://www.snapchat.com/web", wait_until="domcontentloaded")
-                print("Sign in to Snapchat in the Chrome window or browser view. This closes when login succeeds.")
                 page.get_by_role("button", name="New Chat", exact=True).wait_for(timeout=1200000)
+                print("Snapchat login saved. You can close the browser tab; automatic checks will resume.", flush=True)
                 LOG.info("Chrome session saved.")
                 return
             events = []
