@@ -2,7 +2,6 @@ venv/
 .venv/
 .runtime/
 settings.py
-assets/outputs/
 .env
 .env.*
 __pycache__/

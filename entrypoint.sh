@@ -13,7 +13,11 @@ if [ ! -f settings.py ]; then
 fi
 
 if [ ! -f assets/outputs/streak.jpg ]; then
-    python image.py
+    if [ -f /opt/snapchat-automator/assets/outputs/streak.jpg ]; then
+        cp /opt/snapchat-automator/assets/outputs/streak.jpg assets/outputs/streak.jpg
+    else
+        python image.py
+    fi
 fi
 
 export DISPLAY=:99
