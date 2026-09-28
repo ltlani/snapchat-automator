@@ -25,6 +25,17 @@ class LoginTests(unittest.TestCase):
         with patch.dict("os.environ", {"SERVER_IP": "2a06:9801:f73:14::10", "SERVER_PORT": "2011"}, clear=True):
             self.assertIn("https://[2a06:9801:f73:14::10]:2011/", browser_view_url())
 
+    def test_private_viewer_host(self):
+        with patch.dict("os.environ", {"BROWSER_VIEW_HOST": "100.105.121.93", "SERVER_PORT": "2011"}, clear=True):
+            with patch("snapchat_web.urlopen") as request:
+                self.assertIn("https://100.105.121.93:2011/", browser_view_url())
+                request.assert_not_called()
+
+    def test_invalid_viewer_hosts(self):
+        for host in ("0.0.0.0", "127.0.0.1", "::", "224.0.0.1", "https://example.test"):
+            with patch.dict("os.environ", {"BROWSER_VIEW_HOST": host, "SERVER_PORT": "2011"}, clear=True):
+                self.assertEqual(browser_view_url(), "")
+
     def test_invalid_ports(self):
         for port in ("", "0", "65536", "2011/path"):
             with patch.dict("os.environ", {"SERVER_PORT": port}, clear=True):

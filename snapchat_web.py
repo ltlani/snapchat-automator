@@ -29,8 +29,12 @@ def browser_view_url():
     if not port.isdigit() or not 1 <= int(port) <= 65535:
         return ""
     try:
-        address = ipaddress.ip_address(os.environ.get("SERVER_IP") or "0.0.0.0")
-        if not address.is_global:
+        viewer_host = os.environ.get("BROWSER_VIEW_HOST", "").strip()
+        address = ipaddress.ip_address(viewer_host or os.environ.get("SERVER_IP") or "0.0.0.0")
+        if address.is_unspecified or address.is_loopback or address.is_multicast:
+            if viewer_host:
+                return ""
+        if not viewer_host and not address.is_global:
             with urlopen("https://api.ipify.org", timeout=5) as response:
                 address = ipaddress.ip_address(response.read(64).decode().strip())
             if not address.is_global:
