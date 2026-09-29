@@ -228,11 +228,11 @@ def prepare_snap(page, config):
         camera.click()
         step = "waiting for the generated camera stream"
         page.wait_for_function("""() => {
-          if (!(window.__streakCamera?.calls > 0)) return false;
-          const tracks = new Set(window.__streakCamera.trackIds);
+          if (!window.__streakCamera?.ready || !(window.__streakCamera.calls > 0)) return false;
+          // Snapchat can clone or process the generated stream, changing track IDs.
           return [...document.querySelectorAll('video')].some(video =>
-            video.srcObject?.getVideoTracks?.().some(track => tracks.has(track.id)) &&
-            video.videoWidth > 0 && video.readyState >= 2);
+            video.srcObject?.getVideoTracks?.().some(track => track.readyState === 'live') &&
+            video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2);
         }""", timeout=60000)
         step = "capturing the photo"
         page.locator("button:has(#CaptureButton_captureButton)").click()
@@ -353,7 +353,10 @@ def run_browser(config, command, state):
                       camera: window.__streakCamera || null,
                       videos: [...document.querySelectorAll('video')].map(v => ({
                         id: v.id, width: v.videoWidth, height: v.videoHeight,
-                        readyState: v.readyState, hasStream: !!v.srcObject
+                        readyState: v.readyState, hasStream: !!v.srcObject,
+                        tracks: v.srcObject?.getVideoTracks?.().map(t => ({
+                          id: t.id, readyState: t.readyState, muted: t.muted
+                        })) || []
                       })),
                       buttons: [...document.querySelectorAll('button')].map(b => ({
                         label: b.getAttribute('aria-label'), title: b.title,
