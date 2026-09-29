@@ -235,7 +235,11 @@ def prepare_snap(page, config):
             video.videoWidth > 0 && video.videoHeight > 0 && video.readyState >= 2);
         }""", timeout=60000)
         step = "capturing the photo"
-        page.locator("button:has(#CaptureButton_captureButton)").click()
+        capture = page.locator("button:has(#CaptureButton_captureButton)")
+        if capture.count() == 0:
+            capture = page.locator("button.fE2D5")
+        LOG.info("Camera ready. Taking the photo.")
+        capture.click()
         step = "waiting for the Snap preview"
         page.get_by_role("button", name="Send", exact=True).wait_for(timeout=60000)
         selected = page.locator(".Ecdhx li").all_text_contents()

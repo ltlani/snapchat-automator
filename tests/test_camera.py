@@ -23,7 +23,7 @@ class CameraTests(unittest.TestCase):
         cls.browser.close()
         cls.playwright.stop()
 
-    def check_camera(self, stop_track=False):
+    def check_camera(self, stop_track=False, capture_marker=True):
         config = {"recipient": "Test Friend", "conversation_id": "test-conversation"}
         with tempfile.TemporaryDirectory() as temporary:
             image_url = snapchat_web.image_data({})
@@ -38,7 +38,7 @@ class CameraTests(unittest.TestCase):
                   <svg viewBox="0 0 70 70"></svg>
                 </button>
                 <video autoplay muted playsinline></video>
-                <button onclick="capture()"><span id="CaptureButton_captureButton"></span></button>
+                CAPTURE_BUTTON
                 <div id="preview" hidden>
                   <ul class="Ecdhx"><li>Test Friend</li></ul>
                   <img class="VcjuA" width="100">
@@ -66,7 +66,9 @@ class CameraTests(unittest.TestCase):
                     document.getElementById('preview').hidden = false;
                   }
                 </script>
-                """.replace("STOP_TRACK", "true" if stop_track else "false")))
+                """.replace("STOP_TRACK", "true" if stop_track else "false").replace(
+                    "CAPTURE_BUTTON", '<button onclick="capture()"><span id="CaptureButton_captureButton"></span></button>'
+                    if capture_marker else '<button class="fE2D5" onclick="capture()"></button>')))
             page = context.new_page()
             wait_for_function = page.wait_for_function
             with patch.object(snapchat_web, "RUNTIME", Path(temporary)), patch.object(
@@ -89,6 +91,9 @@ class CameraTests(unittest.TestCase):
 
     def test_ended_camera_track_cannot_be_captured(self):
         self.check_camera(stop_track=True)
+
+    def test_current_snapchat_capture_button_without_marker(self):
+        self.check_camera(capture_marker=False)
 
 
 if __name__ == "__main__":
