@@ -246,7 +246,15 @@ def prepare_snap(page, config):
         send.or_(send_to).wait_for(timeout=60000)
         preview = page.locator("img.VcjuA")
         preview.wait_for()
-        preview.screenshot(path=str(RUNTIME / "last-preview.png"))
+        preview_data = preview.evaluate("""async image => {
+          await image.decode();
+          const canvas = document.createElement('canvas');
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          canvas.getContext('2d').drawImage(image, 0, 0);
+          return canvas.toDataURL('image/png');
+        }""")
+        (RUNTIME / "last-preview.png").write_bytes(base64.b64decode(preview_data.split(",", 1)[1]))
         step = "opening the recipient selection"
         if send_to.is_visible():
             send_to.click()

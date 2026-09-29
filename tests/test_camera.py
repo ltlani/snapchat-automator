@@ -3,6 +3,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from PIL import Image
 from playwright.sync_api import Error, sync_playwright
 
 import snapchat_web
@@ -84,6 +85,8 @@ class CameraTests(unittest.TestCase):
                     snapchat_web.prepare_snap(page, config)
                     self.assertTrue(page.evaluate("window.captured"))
                     self.assertTrue((Path(temporary) / "last-preview.png").is_file())
+                    with Image.open(Path(temporary) / "last-preview.png") as saved:
+                        self.assertEqual(saved.size, (1080, 1920))
                 self.assertFalse(page.evaluate("window.sent"))
                 self.assertFalse(page.evaluate("""window.__streakCamera.trackIds.includes(
                     document.querySelector('video').srcObject.getVideoTracks()[0].id)"""))
