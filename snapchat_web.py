@@ -144,7 +144,7 @@ def camera_script(data_url):
       });
       image.src = DATA_URL;
       const streams = new Set();
-      window.__streakCamera = { calls: 0, ready: false };
+      window.__streakCamera = { calls: 0, ready: false, trackIds: [] };
       ready.then(() => { window.__streakCamera.ready = true; });
       navigator.mediaDevices.getUserMedia = async constraints => {
         if (!constraints || !constraints.video)
@@ -163,6 +163,7 @@ def camera_script(data_url):
         track.stop = () => { clearInterval(timer); streams.delete(stream); originalStop(); };
         streams.add(stream);
         window.__streakCamera.calls += 1;
+        window.__streakCamera.trackIds.push(track.id);
         return stream;
       };
       window.addEventListener('pagehide', () => {
@@ -207,31 +208,46 @@ def grpc_web_status(body):
 def prepare_snap(page, config):
     from playwright.sync_api import TimeoutError as PlaywrightTimeout
     conversation_id = config["conversation_id"]
-    LOG.info("Opening the configured Snapchat conversation.")
-    page.goto(f"https://www.snapchat.com/web/{conversation_id}", wait_until="domcontentloaded")
+    step = "opening the conversation"
     try:
+        LOG.info("Opening the configured Snapchat conversation.")
+        page.goto(f"https://www.snapchat.com/web/{conversation_id}", wait_until="domcontentloaded", timeout=60000)
+        step = "waiting for the signed-in chat"
         page.get_by_role("button", name="Close Chat", exact=True).wait_for(timeout=60000)
+        step = "checking the recipient"
+        name = page.locator(f'[id="title-{conversation_id}"]')
+        name.wait_for()
+        if name.inner_text().strip() != config["recipient"]:
+            raise SenderError("The conversation name does not match. No Snap was sent.")
+        LOG.info("Capturing the generated image as a camera Snap.")
+        step = "opening the camera"
+        # Snapchat's icon and capture ID survive CSS class changes.
+        camera = page.locator("button.cDumY")
+        if camera.count() == 0:
+            camera = page.locator('button:has(svg[viewBox="0 0 70 70"])')
+        camera.click()
+        step = "waiting for the generated camera stream"
+        page.wait_for_function("""() => {
+          if (!(window.__streakCamera?.calls > 0)) return false;
+          const tracks = new Set(window.__streakCamera.trackIds);
+          return [...document.querySelectorAll('video')].some(video =>
+            video.srcObject?.getVideoTracks?.().some(track => tracks.has(track.id)) &&
+            video.videoWidth > 0 && video.readyState >= 2);
+        }""", timeout=60000)
+        step = "capturing the photo"
+        page.locator("button:has(#CaptureButton_captureButton)").click()
+        step = "waiting for the Snap preview"
+        page.get_by_role("button", name="Send", exact=True).wait_for(timeout=60000)
+        selected = page.locator(".Ecdhx li").all_text_contents()
+        if selected != [config["recipient"]]:
+            raise SenderError(f"Unexpected recipient selection: {selected!r}; no Snap sent.")
+        preview = page.locator("img.VcjuA")
+        preview.wait_for()
+        preview.screenshot(path=str(RUNTIME / "last-preview.png"))
     except PlaywrightTimeout as exc:
-        raise SenderError("Snapchat session unavailable. Run: python main.py login") from exc
-    name = page.locator(f'[id="title-{conversation_id}"]')
-    name.wait_for()
-    if name.inner_text().strip() != config["recipient"]:
-        raise SenderError("The conversation name does not match. No Snap was sent.")
-    LOG.info("Capturing the generated image as a camera Snap.")
-    page.locator("button.cDumY").click()
-    page.wait_for_function("""() => {
-      const video = document.querySelector('#local-video');
-      return window.__streakCamera?.calls > 0 && video?.videoWidth > 0
-             && video.readyState >= 2;
-    }""")
-    page.locator("button.fE2D5").click()
-    page.get_by_role("button", name="Send", exact=True).wait_for()
-    selected = page.locator(".Ecdhx li").all_text_contents()
-    if selected != [config["recipient"]]:
-        raise SenderError(f"Unexpected recipient selection: {selected!r}; no Snap sent.")
-    preview = page.locator("img.VcjuA")
-    preview.wait_for()
-    preview.screenshot(path=str(RUNTIME / "last-preview.png"))
+        if step == "waiting for the signed-in chat":
+            raise SenderError("Snapchat session unavailable. Run: python main.py login") from exc
+        raise SenderError(f"Timed out {step}. No Snap was sent. See .runtime/last-error.txt and last-error.png.") from exc
 
 
 def chrome_user_agent(playwright):
@@ -319,14 +335,31 @@ def run_browser(config, command, state):
             state["last_sent_at"] = datetime.now(timezone.utc).isoformat()
             save_json(config["state_file"], state)
             save_json(RUNTIME / "last-network.json", events)
-            page.locator(f'[id="title-{config["conversation_id"]}"]').screenshot(
-                path=str(RUNTIME / "last-delivery.png"))
+            try:
+                page.locator(f'[id="title-{config["conversation_id"]}"]').screenshot(
+                    path=str(RUNTIME / "last-delivery.png"), timeout=5000)
+            except Exception as error:
+                LOG.warning("Snap delivered, but the delivery screenshot could not be saved (%s).", type(error).__name__)
             LOG.info("Snap sent to %s. Next send is due in %s hours.", config["recipient"], config["interval_hours"])
-        except Exception:
+        except Exception as error:
             if context.pages:
                 try:
                     page = context.pages[0]
-                    (RUNTIME / "last-error.txt").write_text(page.title(), encoding="utf-8")
+                    (RUNTIME / "last-error.txt").write_text(
+                        f"{type(error).__name__}: {error}\nURL: {page.url}\n\n"
+                        + page.locator("body").inner_text(timeout=5000), encoding="utf-8")
+                    page.screenshot(path=str(RUNTIME / "last-error.png"), timeout=5000)
+                    save_json(RUNTIME / "last-camera-state.json", page.evaluate("""() => ({
+                      camera: window.__streakCamera || null,
+                      videos: [...document.querySelectorAll('video')].map(v => ({
+                        id: v.id, width: v.videoWidth, height: v.videoHeight,
+                        readyState: v.readyState, hasStream: !!v.srcObject
+                      })),
+                      buttons: [...document.querySelectorAll('button')].map(b => ({
+                        label: b.getAttribute('aria-label'), title: b.title,
+                        text: b.textContent, className: b.className
+                      }))
+                    })"""))
                 except Exception:
                     pass
             raise

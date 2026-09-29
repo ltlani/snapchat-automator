@@ -1,6 +1,7 @@
 import sys
 import shlex
 import time
+import logging
 from datetime import datetime
 from queue import Empty, Queue
 from threading import Thread
@@ -13,6 +14,11 @@ def note(message):
     print(message)
     with (RUNTIME / "sender.log").open("a", encoding="utf-8") as log:
         log.write(f"{datetime.now():%Y-%m-%d %H:%M:%S} {message}\n")
+
+
+def error_detail(error):
+    lines = str(error).splitlines()
+    return lines[0] if lines else "No further details."
 
 
 def file_for(friend_id):
@@ -68,7 +74,7 @@ def send_all(manual=False):
             if "session unavailable" in str(error).lower():
                 break
         except Exception as error:
-            note(f"{name}: browser error ({type(error).__name__})")
+            note(f"{name}: browser error ({type(error).__name__}): {error_detail(error)}")
             failed = True
             break
     return 1 if failed else 0
@@ -128,7 +134,7 @@ def run_forever():
             except SenderError as error:
                 note(f"Check skipped: {error}")
             except Exception as error:
-                note(f"Check failed ({type(error).__name__})")
+                note(f"Check failed ({type(error).__name__}): {error_detail(error)}")
             next_check = time.monotonic() + 300
             continue
 
@@ -152,10 +158,11 @@ def run_forever():
         except SenderError as error:
             note(str(error))
         except Exception as error:
-            note(f"Command failed ({type(error).__name__})")
+            note(f"Command failed ({type(error).__name__}): {error_detail(error)}")
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
         sys.stderr.reconfigure(encoding="utf-8")
@@ -183,4 +190,4 @@ if __name__ == "__main__":
     except SenderError as error:
         raise SystemExit(str(error)) from None
     except Exception as error:
-        raise SystemExit(f"Browser problem ({type(error).__name__}). Try login or preview again.") from None
+        raise SystemExit(f"Browser problem ({type(error).__name__}): {error_detail(error)}") from None
