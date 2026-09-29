@@ -15,7 +15,7 @@ import snapchat_web
 
 
 class DeliveryTests(unittest.TestCase):
-    def test_delayed_worker_upload_is_confirmed(self):
+    def check_send(self, group=False):
         with tempfile.TemporaryDirectory() as temporary, sync_playwright() as playwright:
             launch = playwright.chromium.launch_persistent_context
 
@@ -54,11 +54,16 @@ class DeliveryTests(unittest.TestCase):
                               await fetch('https://web.snapchat.com/messagingcoreservice.MessagingCoreService/CreateContentMessage',
                                           {method: 'POST'});
                               document.getElementById('close').hidden = true;
-                              document.getElementById('status-test').textContent = 'Delivered';
+                              document.getElementById('status-test').textContent = GROUP ? 'New Chat' : 'Delivered';
+                              if (GROUP) {
+                                const toast = document.createElement('div');
+                                toast.textContent = 'Snap sent!';
+                                document.body.appendChild(toast);
+                              }
                               document.querySelector('time').dateTime = new Date().toISOString();
                             }
                           </script>
-                        """)
+                        """.replace("GROUP", "true" if group else "false"))
 
                 context.route("**/*", serve)
                 return context
@@ -80,6 +85,12 @@ class DeliveryTests(unittest.TestCase):
             self.assertEqual(upload["http_status"], 200)
             self.assertEqual(upload["path"], "/x/[media]")
             self.assertNotIn("private", json.dumps(events))
+
+    def test_delayed_worker_upload_is_confirmed(self):
+        self.check_send()
+
+    def test_group_snap_confirmation_still_waits_for_media_upload(self):
+        self.check_send(group=True)
 
     def check_verification(self, name="Test Friend", timestamp="2026-09-29T09:00:01Z", confirmed=True):
         settings = types.ModuleType("settings")
@@ -111,6 +122,18 @@ class DeliveryTests(unittest.TestCase):
 
     def test_other_recipient_does_not_clear_pending(self):
         self.check_verification(name="Other Friend", confirmed=False)
+
+    def test_manual_send_can_target_one_friend(self):
+        settings = types.ModuleType("settings")
+        settings.FRIENDS = [("Test Friend", "test"), ("Other Friend", "other")]
+        settings.HEADLESS, settings.HOURS, settings.IMAGE = True, 22, "assets/outputs/streak.jpg"
+        spec = importlib.util.spec_from_file_location("sender_target_test", snapchat_web.ROOT / "main.py")
+        main = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"settings": settings}):
+            spec.loader.exec_module(main)
+        with patch.object(main, "run_lock", return_value=nullcontext()), patch.object(main, "send_all", return_value=0) as send:
+            main.run_command("manual-send", ["Test Friend"])
+            send.assert_called_once_with(manual=True, friends=[("Test Friend", "test")])
 
 
 if __name__ == "__main__":

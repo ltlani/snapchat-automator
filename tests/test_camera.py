@@ -103,6 +103,15 @@ class CameraTests(unittest.TestCase):
     def test_send_to_screen_is_opened_without_publishing(self):
         self.check_camera(send_to=True)
 
+    def test_visible_delivery_status_overrides_hidden_group_label(self):
+        page = self.browser.new_page()
+        self.addCleanup(page.close)
+        page.set_content('''<div role="button"><span id="title-group">Group</span>
+          <span id="status-group" hidden>New Chat</span><span>Opened</span>
+          <time datetime="2026-09-29T09:00:00Z"></time></div>''')
+        receipt = snapchat_web.delivery_receipts(page, [("Group", "group")])[0]
+        self.assertEqual(receipt["status"], "Opened")
+
 
 if __name__ == "__main__":
     unittest.main()

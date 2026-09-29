@@ -54,13 +54,14 @@ def show_status():
         print(f"{name}: {message}")
 
 
-def verify_deliveries():
-    name, friend_id = FRIENDS[0]
+def verify_deliveries(friends=None):
+    friends = FRIENDS if friends is None else friends
+    name, friend_id = friends[0]
     config = friend_config(name, friend_id)
-    config["friends"] = FRIENDS
+    config["friends"] = friends
     receipts = run_browser(config, "verify", {})
     failed = False
-    for (name, friend_id), receipt in zip(FRIENDS, receipts):
+    for (name, friend_id), receipt in zip(friends, receipts):
         state = load_json(file_for(friend_id))
         pending = state.get("pending_send")
         if not pending:
@@ -85,9 +86,9 @@ def verify_deliveries():
     return 1 if failed else 0
 
 
-def send_all(manual=False):
+def send_all(manual=False, friends=None):
     failed = False
-    for name, friend_id in FRIENDS:
+    for name, friend_id in (FRIENDS if friends is None else friends):
         state = load_json(file_for(friend_id))
         if state.get("pending_send"):
             note(f"{name}: previous result is uncertain; check Snapchat first")
@@ -123,11 +124,15 @@ def run_command(command, args):
         elif command == "send":
             return send_all()
         elif command == "manual-send":
-            return send_all(manual=True)
+            if len(args) > 1:
+                raise SenderError('Use: manual-send "Friend Name", or manual-send for everyone')
+            return send_all(manual=True, friends=[find_friend(args[0])] if args else None)
         elif command == "status":
             show_status()
         elif command == "verify":
-            return verify_deliveries()
+            if len(args) > 1:
+                raise SenderError('Use: verify "Friend Name", or verify for everyone')
+            return verify_deliveries([find_friend(args[0])] if args else None)
         elif command == "resolve":
             if len(args) != 2:
                 raise SenderError('Use: resolve "Friend Name" sent|not-sent')

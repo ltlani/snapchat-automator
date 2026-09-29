@@ -282,11 +282,14 @@ def chrome_user_agent(playwright):
 
 
 def delivery_receipts(page, friends):
-    return page.evaluate("""friends => friends.map(([name, id]) => {
+    return page.evaluate(r"""friends => friends.map(([name, id]) => {
       const title = document.getElementById('title-' + id);
       const row = title?.closest('[role="button"]');
+      const visible = row?.innerText?.slice(title?.innerText?.length || 0).split('\n').map(s => s.trim());
+      const status = visible?.find(s => /^(Delivered|Opened)$/.test(s)) ||
+                     document.getElementById('status-' + id)?.textContent;
       return {id, name: title?.textContent?.trim(),
-              status: document.getElementById('status-' + id)?.textContent,
+              status, row_text: row?.innerText,
               timestamp: row?.querySelector('time')?.getAttribute('datetime')};
     })""", friends)
 
@@ -355,14 +358,18 @@ def run_browser(config, command, state):
                     raise SenderError("Snapchat did not confirm the message RPC.")
                 page.get_by_role("button", name="Close snap preview and return to camera.",
                                  exact=True).wait_for(state="hidden", timeout=60000)
-                page.wait_for_function("""({id, started}) => {
+                native_confirmation = page.get_by_text("Snap sent!", exact=True).is_visible()
+                page.wait_for_function(r"""({id, started, confirmed}) => {
+                  if (confirmed) return true;
                   const title = document.getElementById('title-' + id);
                   const row = title?.closest('[role="button"]');
-                  const status = document.getElementById('status-' + id)?.textContent;
+                  const visible = row?.innerText?.slice(title?.innerText?.length || 0).split('\n').map(s => s.trim());
+                  const status = visible?.find(s => /^(Delivered|Opened)$/.test(s)) ||
+                                 document.getElementById('status-' + id)?.textContent;
                   const timestamp = row?.querySelector('time')?.getAttribute('datetime');
                   return /Delivered|Opened/.test(status || '') && timestamp &&
                          Date.parse(timestamp) >= started - 5000;
-                }""", arg={"id": config["conversation_id"], "started":
+                }""", arg={"id": config["conversation_id"], "confirmed": native_confirmation, "started":
                            datetime.fromisoformat(state["pending_send"]["started_at"]).timestamp() * 1000}, timeout=90000)
                 deadline = time.monotonic() + 60
                 while not any(x.get("media_upload") and 200 <= x["http_status"] < 300 for x in events):
