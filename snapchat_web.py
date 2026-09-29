@@ -10,6 +10,7 @@ import logging
 import os
 from pathlib import Path
 import sys
+import time
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
@@ -177,13 +178,15 @@ def network_summary(response):
     url = urlsplit(response.url)
     if request.method not in ("POST", "PUT"):
         return None
-    if url.hostname not in ("web.snapchat.com", "bolt-gcdn.sc-cdn.net"):
+    media_upload = request.method == "PUT"
+    if not media_upload and url.hostname != "web.snapchat.com" and not (url.hostname or "").endswith(".sc-cdn.net"):
         return None
     if any(part in url.path for part in ("metrics", "graphene", "blizzard")):
         return None
-    path = "/x/[media]" if url.hostname == "bolt-gcdn.sc-cdn.net" else url.path
+    path = "/x/[media]" if url.hostname != "web.snapchat.com" else url.path
     return {"host": url.hostname, "path": path, "method": request.method,
             "http_status": response.status,
+            "media_upload": media_upload,
             "grpc_status": response.headers.get("grpc-status")}
 
 
@@ -278,6 +281,16 @@ def chrome_user_agent(playwright):
         browser.close()
 
 
+def delivery_receipts(page, friends):
+    return page.evaluate("""friends => friends.map(([name, id]) => {
+      const title = document.getElementById('title-' + id);
+      const row = title?.closest('[role="button"]');
+      return {id, name: title?.textContent?.trim(),
+              status: document.getElementById('status-' + id)?.textContent,
+              timestamp: row?.querySelector('time')?.getAttribute('datetime')};
+    })""", friends)
+
+
 def run_browser(config, command, state):
     from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
     if command == "login":
@@ -297,7 +310,7 @@ def run_browser(config, command, state):
         )
         try:
             context.grant_permissions(["camera"], origin="https://www.snapchat.com")
-            if command != "login":
+            if command not in ("login", "verify"):
                 context.add_init_script(camera_script(image_data(config)))
             page = context.pages[0] if context.pages else context.new_page()
             page.set_default_timeout(30000)
@@ -307,19 +320,27 @@ def run_browser(config, command, state):
                 print("Snapchat login saved. You can close the browser tab; automatic checks will resume.", flush=True)
                 LOG.info("Chrome session saved.")
                 return
+            if command == "verify":
+                page.goto("https://www.snapchat.com/web", wait_until="domcontentloaded")
+                page.get_by_role("button", name="New Chat", exact=True).wait_for(timeout=60000)
+                page.locator(f'[id="title-{config["conversation_id"]}"]').wait_for(timeout=60000)
+                page.wait_for_timeout(1000)
+                receipts = delivery_receipts(page, config["friends"])
+                save_json(RUNTIME / "last-deliveries.json", receipts)
+                page.screenshot(path=str(RUNTIME / "last-verified.png"))
+                return receipts
             events = []
             def record(response):
                 summary = network_summary(response)
                 if summary:
                     events.append(summary)
-            page.on("response", record)
+            context.on("response", record)
             prepare_snap(page, config)
             if command == "preview":
                 LOG.info("Preview saved to .runtime/last-preview.png. Nothing sent.")
                 return
             state["pending_send"] = {"started_at": datetime.now(timezone.utc).isoformat()}
             save_json(config["state_file"], state)
-            events.clear()
             try:
                 with page.expect_response(lambda r: urlsplit(r.url).path ==
                         "/messagingcoreservice.MessagingCoreService/CreateContentMessage"
@@ -343,12 +364,14 @@ def run_browser(config, command, state):
                          Date.parse(timestamp) >= started - 5000;
                 }""", arg={"id": config["conversation_id"], "started":
                            datetime.fromisoformat(state["pending_send"]["started_at"]).timestamp() * 1000}, timeout=90000)
-                page.wait_for_timeout(500)
-                if not any(x["method"] == "PUT" and 200 <= x["http_status"] < 300 for x in events):
-                    raise SenderError("No successful media upload was observed.")
+                deadline = time.monotonic() + 60
+                while not any(x.get("media_upload") and 200 <= x["http_status"] < 300 for x in events):
+                    if time.monotonic() >= deadline:
+                        raise SenderError("No successful media upload was observed.")
+                    page.wait_for_timeout(250)
             except (PlaywrightTimeout, SenderError) as exc:
                 save_json(RUNTIME / "last-network.json", events)
-                raise SenderError("Send outcome uncertain. Check the chat and run resolve; automatic retries are paused.") from exc
+                raise SenderError(f"Send outcome uncertain ({str(exc).splitlines()[0]}). Check the chat and run verify; automatic retries are paused.") from exc
             state.pop("pending_send", None)
             state["last_sent_at"] = datetime.now(timezone.utc).isoformat()
             save_json(config["state_file"], state)

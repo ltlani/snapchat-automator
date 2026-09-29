@@ -54,6 +54,37 @@ def show_status():
         print(f"{name}: {message}")
 
 
+def verify_deliveries():
+    name, friend_id = FRIENDS[0]
+    config = friend_config(name, friend_id)
+    config["friends"] = FRIENDS
+    receipts = run_browser(config, "verify", {})
+    failed = False
+    for (name, friend_id), receipt in zip(FRIENDS, receipts):
+        state = load_json(file_for(friend_id))
+        pending = state.get("pending_send")
+        if not pending:
+            continue
+        timestamp = receipt.get("timestamp")
+        delivered = (receipt.get("id") == friend_id and receipt.get("name") == name
+                     and any(status in (receipt.get("status") or "") for status in ("Delivered", "Opened")))
+        if delivered and timestamp:
+            sent = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+            started = datetime.fromisoformat(pending["started_at"])
+            delivered = sent.timestamp() >= started.timestamp() - 5
+        else:
+            delivered = False
+        if delivered:
+            state.pop("pending_send")
+            state["last_sent_at"] = pending["started_at"]
+            save_json(file_for(friend_id), state)
+            note(f"Verified sent to {name}")
+        else:
+            note(f"{name}: delivery not confirmed; retries remain paused")
+            failed = True
+    return 1 if failed else 0
+
+
 def send_all(manual=False):
     failed = False
     for name, friend_id in FRIENDS:
@@ -95,6 +126,8 @@ def run_command(command, args):
             return send_all(manual=True)
         elif command == "status":
             show_status()
+        elif command == "verify":
+            return verify_deliveries()
         elif command == "resolve":
             if len(args) != 2:
                 raise SenderError('Use: resolve "Friend Name" sent|not-sent')
@@ -109,7 +142,7 @@ def run_command(command, args):
             save_json(file_for(friend_id), state)
             print(f"Updated {name}")
         else:
-            raise SenderError("Use: login, preview, send, manual-send, status, or resolve")
+            raise SenderError("Use: login, preview, send, manual-send, status, verify, or resolve")
     return 0
 
 
@@ -122,7 +155,7 @@ def run_forever():
     commands = Queue()
     Thread(target=read_console, args=(commands,), daemon=True).start()
     note(f"Snapchat sender ready. Checking every 5 minutes; each friend is due every {HOURS} hours.")
-    print('Console commands: login, status, preview "Friend Name", manual-send, resolve "Friend Name" sent|not-sent, stop', flush=True)
+    print('Console commands: login, status, preview "Friend Name", manual-send, verify, resolve "Friend Name" sent|not-sent, stop', flush=True)
     next_check = time.monotonic() + 300
 
     while True:
@@ -148,7 +181,7 @@ def run_forever():
                 note("Stopped from the console.")
                 return
             if parts[0] == "help":
-                print('Commands: login, status, preview "Friend Name", manual-send, resolve "Friend Name" sent|not-sent, stop', flush=True)
+                print('Commands: login, status, preview "Friend Name", manual-send, verify, resolve "Friend Name" sent|not-sent, stop', flush=True)
                 continue
             result = run_command(parts[0], parts[1:])
             if result:
