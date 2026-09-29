@@ -23,7 +23,7 @@ class CameraTests(unittest.TestCase):
         cls.browser.close()
         cls.playwright.stop()
 
-    def check_camera(self, stop_track=False, capture_marker=True):
+    def check_camera(self, stop_track=False, capture_marker=True, send_to=False):
         config = {"recipient": "Test Friend", "conversation_id": "test-conversation"}
         with tempfile.TemporaryDirectory() as temporary:
             image_url = snapchat_web.image_data({})
@@ -42,7 +42,7 @@ class CameraTests(unittest.TestCase):
                 <div id="preview" hidden>
                   <ul class="Ecdhx"><li>Test Friend</li></ul>
                   <img class="VcjuA" width="100">
-                  <button onclick="window.sent = true">Send</button>
+                  SEND_BUTTON
                 </div>
                 <script>
                   window.sent = false;
@@ -68,7 +68,9 @@ class CameraTests(unittest.TestCase):
                 </script>
                 """.replace("STOP_TRACK", "true" if stop_track else "false").replace(
                     "CAPTURE_BUTTON", '<button onclick="capture()"><span id="CaptureButton_captureButton"></span></button>'
-                    if capture_marker else '<button class="fE2D5" onclick="capture()"></button>')))
+                    if capture_marker else '<button class="fE2D5" onclick="capture()"></button>').replace(
+                    "SEND_BUTTON", '<button onclick="this.textContent=\'Send\';this.onclick=()=>window.sent=true">Send To</button>'
+                    if send_to else '<button onclick="window.sent = true">Send</button>')))
             page = context.new_page()
             wait_for_function = page.wait_for_function
             with patch.object(snapchat_web, "RUNTIME", Path(temporary)), patch.object(
@@ -94,6 +96,9 @@ class CameraTests(unittest.TestCase):
 
     def test_current_snapchat_capture_button_without_marker(self):
         self.check_camera(capture_marker=False)
+
+    def test_send_to_screen_is_opened_without_publishing(self):
+        self.check_camera(send_to=True)
 
 
 if __name__ == "__main__":

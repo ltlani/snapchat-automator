@@ -241,13 +241,19 @@ def prepare_snap(page, config):
         LOG.info("Camera ready. Taking the photo.")
         capture.click()
         step = "waiting for the Snap preview"
-        page.get_by_role("button", name="Send", exact=True).wait_for(timeout=60000)
-        selected = page.locator(".Ecdhx li").all_text_contents()
-        if selected != [config["recipient"]]:
-            raise SenderError(f"Unexpected recipient selection: {selected!r}; no Snap sent.")
+        send = page.get_by_role("button", name="Send", exact=True)
+        send_to = page.get_by_role("button", name="Send To", exact=True)
+        send.or_(send_to).wait_for(timeout=60000)
         preview = page.locator("img.VcjuA")
         preview.wait_for()
         preview.screenshot(path=str(RUNTIME / "last-preview.png"))
+        step = "opening the recipient selection"
+        if send_to.is_visible():
+            send_to.click()
+        send.wait_for()
+        selected = page.locator(".Ecdhx li").all_text_contents()
+        if selected != [config["recipient"]]:
+            raise SenderError(f"Unexpected recipient selection: {selected!r}; no Snap sent.")
     except PlaywrightTimeout as exc:
         if step == "waiting for the signed-in chat":
             raise SenderError("Snapchat session unavailable. Run: python main.py login") from exc
@@ -365,6 +371,14 @@ def run_browser(config, command, state):
                       buttons: [...document.querySelectorAll('button')].map(b => ({
                         label: b.getAttribute('aria-label'), title: b.title,
                         text: b.textContent, className: b.className
+                      })),
+                      inputs: [...document.querySelectorAll('input')].map(i => ({
+                        type: i.type, id: i.id, placeholder: i.placeholder,
+                        checked: i.checked, label: i.closest('label')?.textContent
+                      })),
+                      images: [...document.querySelectorAll('img')].map(i => ({
+                        className: i.className, alt: i.alt,
+                        width: i.naturalWidth, height: i.naturalHeight
                       }))
                     })"""))
                 except Exception:
