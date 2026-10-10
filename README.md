@@ -1,17 +1,16 @@
 # Snapchat streak sender
 
-Sends a black Snap with your text to your chosen friends every 22 hours.
+Sends a plain black Snap to your active 🔥 Streak chats every 22 hours. It checks the chat list every 10 minutes, so you don't have to add friends yourself.
 
-1. Add your friends in `settings.py`.
-2. Start the server and type `login` in the console. Open the browser link it gives you and sign in to Snapchat.
-3. Leave the server running and it'll handle the sends.
+Start the server and type `login` in the console to sign in to Snapchat. Your login is saved between restarts. If Snapchat signs you out later, type `login` again.
 
-A few handy console commands:
+Useful console commands:
 
-- `status` — see when the next sends are due.
-- `preview "Friend Name"` — check the Snap without sending it.
-- `manual-send` — send to everyone now.
-- `manual-send "Friend Name"` — send to just that friend.
-- `verify` — check any sends that weren't confirmed.
+- `streaks` — see who it found.
+- `status` — see when each Snap is due.
+- `preview "Friend Name"` — check the Snap without sending.
+- `manual-send` — send to all current Streak chats now.
+- `manual-send "Friend Name"` — send to one chat, even without a Streak.
+- `verify` — check sends that weren't confirmed.
 
-You can change the timing in `settings.py`. Restart after changing it.
+You can change the 22-hour timing in `settings.py`. The `deploy/example.conf` file is a sample; keep your real server config private.

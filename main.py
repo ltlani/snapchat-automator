@@ -6,7 +6,7 @@ from datetime import datetime
 from queue import Empty, Queue
 from threading import Thread
 
-from settings import FRIENDS, HEADLESS, HOURS, IMAGE
+from settings import HEADLESS, HOURS
 from snapchat_web import RUNTIME, SenderError, load_json, run_browser, run_lock, save_json, seconds_until_due
 
 
@@ -29,22 +29,37 @@ def friend_config(name, friend_id):
     return {
         "recipient": name,
         "conversation_id": friend_id,
-        "image": IMAGE,
         "headless": HEADLESS,
         "interval_hours": HOURS,
         "state_file": file_for(friend_id),
     }
 
 
-def find_friend(text):
-    for name, friend_id in FRIENDS:
-        if text == name or text == friend_id:
-            return name, friend_id
-    raise SenderError(f"Friend not found: {text}")
+def known_chats(refresh=False):
+    if refresh:
+        chats = run_browser({"headless": HEADLESS}, "discover", {})
+        save_json(RUNTIME / "last-chat-scan.json", chats)
+        return chats
+    return load_json(RUNTIME / "last-chat-scan.json", [])
+
+
+def streak_friends(chats):
+    return [(chat["name"], chat["id"]) for chat in chats if chat["streak"]]
+
+
+def find_friend(text, chats):
+    matches = [chat for chat in chats if chat["id"] == text or
+               chat["name"].casefold() == text.casefold()]
+    if len(matches) != 1:
+        raise SenderError(f"Could not find one exact chat for {text!r}. Open it in Snapchat first.")
+    return matches[0]["name"], matches[0]["id"]
 
 
 def show_status():
-    for name, friend_id in FRIENDS:
+    friends = streak_friends(known_chats())
+    if not friends:
+        print("No active Streaks found in the last check. Type streaks to check again.")
+    for name, friend_id in friends:
         state = load_json(file_for(friend_id))
         if state.get("pending_send"):
             message = "needs checking before another send"
@@ -55,7 +70,10 @@ def show_status():
 
 
 def verify_deliveries(friends=None):
-    friends = FRIENDS if friends is None else friends
+    friends = streak_friends(known_chats()) if friends is None else friends
+    if not friends:
+        print("No chats to verify.")
+        return 0
     name, friend_id = friends[0]
     config = friend_config(name, friend_id)
     config["friends"] = friends
@@ -88,7 +106,7 @@ def verify_deliveries(friends=None):
 
 def send_all(manual=False, friends=None):
     failed = False
-    for name, friend_id in (FRIENDS if friends is None else friends):
+    for name, friend_id in (streak_friends(known_chats()) if friends is None else friends):
         state = load_json(file_for(friend_id))
         if state.get("pending_send"):
             note(f"{name}: previous result is uncertain; check Snapchat first")
@@ -115,28 +133,44 @@ def send_all(manual=False, friends=None):
 def run_command(command, args):
     with run_lock():
         if command == "login":
-            name, friend_id = FRIENDS[0]
-            run_browser(friend_config(name, friend_id), "login", {})
+            run_browser({"headless": False}, "login", {})
+        elif command == "streaks":
+            friends = streak_friends(known_chats(refresh=True))
+            print(f"Found {len(friends)} active Streak chat(s).")
+            for name, _ in friends:
+                print(name)
         elif command == "preview":
-            name, friend_id = find_friend(args[0] if args else FRIENDS[0][0])
+            chats = known_chats(refresh=True)
+            if args:
+                name, friend_id = find_friend(args[0], chats)
+            else:
+                friends = streak_friends(chats)
+                if not friends:
+                    raise SenderError("No active Streaks found to preview.")
+                name, friend_id = friends[0]
             run_browser(friend_config(name, friend_id), "preview", {})
             print("Preview saved in .runtime/last-preview.png. Nothing was sent.")
         elif command == "send":
-            return send_all()
+            friends = streak_friends(known_chats(refresh=True))
+            note(f"Found {len(friends)} active Streak chat(s).")
+            return send_all(friends=friends)
         elif command == "manual-send":
             if len(args) > 1:
-                raise SenderError('Use: manual-send "Friend Name", or manual-send for everyone')
-            return send_all(manual=True, friends=[find_friend(args[0])] if args else None)
+                raise SenderError('Use: manual-send "Friend Name", or manual-send for current Streaks')
+            chats = known_chats(refresh=True)
+            friends = [find_friend(args[0], chats)] if args else streak_friends(chats)
+            return send_all(manual=True, friends=friends)
         elif command == "status":
             show_status()
         elif command == "verify":
             if len(args) > 1:
                 raise SenderError('Use: verify "Friend Name", or verify for everyone')
-            return verify_deliveries([find_friend(args[0])] if args else None)
+            chats = known_chats(refresh=True)
+            return verify_deliveries([find_friend(args[0], chats)] if args else streak_friends(chats))
         elif command == "resolve":
             if len(args) != 2:
                 raise SenderError('Use: resolve "Friend Name" sent|not-sent')
-            name, friend_id = find_friend(args[0])
+            name, friend_id = find_friend(args[0], known_chats(refresh=True))
             choice = args[1]
             state = load_json(file_for(friend_id))
             pending = state.pop("pending_send", None)
@@ -147,7 +181,7 @@ def run_command(command, args):
             save_json(file_for(friend_id), state)
             print(f"Updated {name}")
         else:
-            raise SenderError("Use: login, preview, send, manual-send, status, verify, or resolve")
+            raise SenderError("Use: login, streaks, status, preview, manual-send, verify, or resolve")
     return 0
 
 
@@ -159,9 +193,9 @@ def read_console(commands):
 def run_forever():
     commands = Queue()
     Thread(target=read_console, args=(commands,), daemon=True).start()
-    note(f"Snapchat sender ready. Checking every 5 minutes; each friend is due every {HOURS} hours.")
-    print('Console commands: login, status, preview "Friend Name", manual-send, verify, resolve "Friend Name" sent|not-sent, stop', flush=True)
-    next_check = time.monotonic() + 300
+    note(f"Snapchat sender ready. Checking Streaks every 10 minutes; each chat is due every {HOURS} hours.")
+    print('Console commands: login, streaks, status, preview "Friend Name", manual-send, verify, resolve "Friend Name" sent|not-sent, stop', flush=True)
+    next_check = time.monotonic() + 600
 
     while True:
         try:
@@ -173,7 +207,7 @@ def run_forever():
                 note(f"Check skipped: {error}")
             except Exception as error:
                 note(f"Check failed ({type(error).__name__}): {error_detail(error)}")
-            next_check = time.monotonic() + 300
+            next_check = time.monotonic() + 600
             continue
 
         if not line:
@@ -186,7 +220,7 @@ def run_forever():
                 note("Stopped from the console.")
                 return
             if parts[0] == "help":
-                print('Commands: login, status, preview "Friend Name", manual-send, verify, resolve "Friend Name" sent|not-sent, stop', flush=True)
+                print('Commands: login, streaks, status, preview "Friend Name", manual-send, verify, resolve "Friend Name" sent|not-sent, stop', flush=True)
                 continue
             result = run_command(parts[0], parts[1:])
             if result:
@@ -210,9 +244,6 @@ def main():
         raise SenderError("HOURS in settings.py must be greater than zero.")
     if not isinstance(HEADLESS, bool):
         raise SenderError("HEADLESS in settings.py must be True or False.")
-    if not FRIENDS:
-        raise SenderError("Add your friends to settings.py before starting the sender.")
-
     if command == "run":
         run_forever()
         return 0

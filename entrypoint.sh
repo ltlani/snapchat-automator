@@ -8,17 +8,10 @@ cp /opt/snapchat-automator/scripts/manual-send.py scripts/
 cp /opt/snapchat-automator/assets/fonts/* assets/fonts/
 if [ ! -f settings.py ]; then
     cp /opt/snapchat-automator/settings.example.py settings.py
-    echo "Created settings.py. Add your friends in the file manager, then start the server again."
-    exit 0
+    echo "Created settings.py with the default 22-hour timing."
 fi
 
-if [ ! -f assets/outputs/streak.jpg ]; then
-    if [ -f /opt/snapchat-automator/assets/outputs/streak.jpg ]; then
-        cp /opt/snapchat-automator/assets/outputs/streak.jpg assets/outputs/streak.jpg
-    else
-        python image.py
-    fi
-fi
+python image.py
 
 export DISPLAY=:99
 Xvfb :99 -screen 0 1440x1000x24 -nolisten tcp >/dev/null 2>&1 &

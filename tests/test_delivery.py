@@ -94,8 +94,7 @@ class DeliveryTests(unittest.TestCase):
 
     def check_verification(self, name="Test Friend", timestamp="2026-09-29T09:00:01Z", confirmed=True):
         settings = types.ModuleType("settings")
-        settings.FRIENDS = [("Test Friend", "test")]
-        settings.HEADLESS, settings.HOURS, settings.IMAGE = True, 22, "assets/outputs/streak.jpg"
+        settings.HEADLESS, settings.HOURS = True, 22
         spec = importlib.util.spec_from_file_location("sender_verification_test", snapchat_web.ROOT / "main.py")
         main = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {"settings": settings}):
@@ -104,7 +103,9 @@ class DeliveryTests(unittest.TestCase):
             started = "2026-09-29T09:00:00+00:00"
             snapchat_web.save_json(main.file_for("test"), {"pending_send": {"started_at": started}})
             receipt = {"id": "test", "name": name, "timestamp": timestamp, "status": "Delivered"}
-            with patch.object(main, "run_browser", return_value=[receipt]), redirect_stdout(io.StringIO()):
+            chats = [{"name": "Test Friend", "id": "test", "streak": True}]
+            with patch.object(main, "known_chats", return_value=chats), patch.object(
+                    main, "run_browser", return_value=[receipt]), redirect_stdout(io.StringIO()):
                 self.assertEqual(main.verify_deliveries(), 0 if confirmed else 1)
             state = snapchat_web.load_json(main.file_for("test"))
             if confirmed:
@@ -125,13 +126,16 @@ class DeliveryTests(unittest.TestCase):
 
     def test_manual_send_can_target_one_friend(self):
         settings = types.ModuleType("settings")
-        settings.FRIENDS = [("Test Friend", "test"), ("Other Friend", "other")]
-        settings.HEADLESS, settings.HOURS, settings.IMAGE = True, 22, "assets/outputs/streak.jpg"
+        settings.HEADLESS, settings.HOURS = True, 22
         spec = importlib.util.spec_from_file_location("sender_target_test", snapchat_web.ROOT / "main.py")
         main = importlib.util.module_from_spec(spec)
         with patch.dict(sys.modules, {"settings": settings}):
             spec.loader.exec_module(main)
-        with patch.object(main, "run_lock", return_value=nullcontext()), patch.object(main, "send_all", return_value=0) as send:
+        chats = [{"name": "Test Friend", "id": "test", "streak": False},
+                 {"name": "Other Friend", "id": "other", "streak": True}]
+        with patch.object(main, "run_lock", return_value=nullcontext()), patch.object(
+                main, "known_chats", return_value=chats), patch.object(
+                main, "send_all", return_value=0) as send:
             main.run_command("manual-send", ["Test Friend"])
             send.assert_called_once_with(manual=True, friends=[("Test Friend", "test")])
 

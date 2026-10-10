@@ -14,7 +14,7 @@ import time
 from urllib.parse import urlsplit
 from urllib.request import urlopen
 
-from PIL import Image, ImageOps
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parent
 RUNTIME = ROOT / ".runtime"
@@ -123,15 +123,9 @@ def run_lock():
 
 
 def image_data(config):
-    image_path = ROOT / config.get("image", "assets/outputs/streak.jpg")
-    if not image_path.is_file():
-        raise SenderError(f"Image missing: {image_path}. Run image.py first.")
-    with Image.open(image_path) as source:
-        image = ImageOps.exif_transpose(source).convert("RGB")
-        if config.get("mirror_camera_input", True):
-            image = ImageOps.mirror(image)
-        encoded = BytesIO()
-        image.save(encoded, format="PNG")
+    image = Image.new("RGB", (1080, 1920), "black")
+    encoded = BytesIO()
+    image.save(encoded, format="PNG")
     return "data:image/png;base64," + base64.b64encode(encoded.getvalue()).decode()
 
 
@@ -272,11 +266,18 @@ def prepare_snap(page, config):
 
 
 def chrome_user_agent(playwright):
+    cached = RUNTIME / "chrome-user-agent.txt"
+    if cached.is_file():
+        user_agent = cached.read_text(encoding="utf-8").strip()
+        if user_agent.startswith("Mozilla/5.0") and "Chrome/" in user_agent:
+            return user_agent
     args = ["--disable-dev-shm-usage"] if sys.platform.startswith("linux") else []
     browser = playwright.chromium.launch(channel="chrome", headless=True, args=args)
     try:
         page = browser.new_page()
-        return page.evaluate("navigator.userAgent").replace("HeadlessChrome/", "Chrome/")
+        user_agent = page.evaluate("navigator.userAgent").replace("HeadlessChrome/", "Chrome/")
+        cached.write_text(user_agent, encoding="utf-8")
+        return user_agent
     finally:
         browser.close()
 
@@ -292,6 +293,53 @@ def delivery_receipts(page, friends):
               status, row_text: row?.innerText,
               timestamp: row?.querySelector('time')?.getAttribute('datetime')};
     })""", friends)
+
+
+def scan_chats(page):
+    """Read the chat list, including chats loaded as the list scrolls."""
+    chats = {}
+    for _ in range(100):
+        visible = page.evaluate(r"""() => [...document.querySelectorAll('[id^="title-"]')]
+          .map(title => {
+            const id = title.id.slice(6);
+            const row = title.closest('[role="button"]');
+            if (!id || !row) return null;
+            const name = title.textContent.trim();
+            const remaining = row.innerText.replace(name, '');
+            const badges = [...row.querySelectorAll('[aria-label], [title], [alt]')]
+              .filter(element => !title.contains(element))
+              .flatMap(element => ['aria-label', 'title', 'alt']
+                .map(attribute => element.getAttribute(attribute) || ''));
+            const streak = /🔥\s*\d+|\d+\s*🔥/u.test(remaining) ||
+              badges.some(badge => /(?:snap)?streak|fire emoji|🔥/i.test(badge));
+            const status = remaining.split('\n').map(text => text.trim())
+              .find(text => /^(Delivered|Opened)$/.test(text)) ||
+              document.getElementById('status-' + id)?.textContent?.trim();
+            const timestamp = row.querySelector('time')?.getAttribute('datetime');
+            return {id, name, streak, status, timestamp};
+          }).filter(Boolean)""")
+        for chat in visible:
+            chats[chat["id"]] = chat
+        movement = page.evaluate(r"""() => {
+          const title = document.querySelector('[id^="title-"]');
+          let scroller = title?.parentElement;
+          while (scroller && scroller !== document.body &&
+                 scroller.scrollHeight <= scroller.clientHeight + 5) {
+            scroller = scroller.parentElement;
+          }
+          if (!scroller || scroller === document.body) scroller = document.scrollingElement;
+          if (!scroller || scroller.scrollHeight <= scroller.clientHeight + 5)
+            return {moved: false, atEnd: true};
+          const before = scroller.scrollTop;
+          scroller.scrollTop = Math.min(scroller.scrollHeight,
+            before + Math.max(300, scroller.clientHeight - 100));
+          return {moved: scroller.scrollTop > before,
+                  atEnd: scroller.scrollTop + scroller.clientHeight >= scroller.scrollHeight - 5};
+        }""")
+        if not movement["moved"]:
+            break
+        page.wait_for_timeout(150)
+    return list(chats.values())
 
 
 def run_browser(config, command, state):
@@ -313,7 +361,7 @@ def run_browser(config, command, state):
         )
         try:
             context.grant_permissions(["camera"], origin="https://www.snapchat.com")
-            if command not in ("login", "verify"):
+            if command not in ("login", "verify", "discover"):
                 context.add_init_script(camera_script(image_data(config)))
             page = context.pages[0] if context.pages else context.new_page()
             page.set_default_timeout(30000)
@@ -323,12 +371,21 @@ def run_browser(config, command, state):
                 print("Snapchat login saved. You can close the browser tab; automatic checks will resume.", flush=True)
                 LOG.info("Chrome session saved.")
                 return
-            if command == "verify":
+            if command in ("verify", "discover"):
                 page.goto("https://www.snapchat.com/web", wait_until="domcontentloaded")
-                page.get_by_role("button", name="New Chat", exact=True).wait_for(timeout=60000)
-                page.locator(f'[id="title-{config["conversation_id"]}"]').wait_for(timeout=60000)
+                try:
+                    page.get_by_role("button", name="New Chat", exact=True).wait_for(timeout=60000)
+                    page.locator('[id^="title-"]').first.wait_for(timeout=60000)
+                except PlaywrightTimeout as exc:
+                    raise SenderError("Snapchat session unavailable. Type login to sign in again.") from exc
                 page.wait_for_timeout(1000)
-                receipts = delivery_receipts(page, config["friends"])
+                chats = scan_chats(page)
+                if command == "discover":
+                    save_json(RUNTIME / "last-chat-scan.json", chats)
+                    return chats
+                by_id = {chat["id"]: chat for chat in chats}
+                receipts = [dict(by_id.get(friend_id, {}), id=friend_id)
+                            for _, friend_id in config["friends"]]
                 save_json(RUNTIME / "last-deliveries.json", receipts)
                 page.screenshot(path=str(RUNTIME / "last-verified.png"))
                 return receipts
