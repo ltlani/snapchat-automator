@@ -34,7 +34,7 @@ class CameraTests(unittest.TestCase):
             context.route("https://www.snapchat.com/**", lambda route: route.fulfill(
                 content_type="text/html", body="""
                 <button title="Close Chat">Close Chat</button>
-                <span id="title-test-conversation">Test Friend</span>
+                <span id="title-test-conversation" style="position:absolute;left:600px;top:0">Test Friend</span>
                 <button class="changed-camera-class" onclick="openCamera()">
                   <svg viewBox="0 0 70 70"></svg>
                 </button>

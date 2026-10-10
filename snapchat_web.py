@@ -202,6 +202,22 @@ def grpc_web_status(body):
     return None
 
 
+def wait_for_recipient(page, conversation_id, recipient, timeout=30000):
+    if urlsplit(page.url).path.rstrip("/") != f"/web/{conversation_id}":
+        raise SenderError("The conversation ID changed. No Snap was sent.")
+    # Older chats disappear from Snapchat's scrolling sidebar, but the open
+    # conversation always shows its name in the header above the messages.
+    page.wait_for_function("""expected => [...document.querySelectorAll('body *')]
+          .some(element => {
+            if (element.textContent?.trim() !== expected ||
+                [...element.children].some(child => child.textContent?.trim() === expected))
+              return false;
+            const box = element.getBoundingClientRect();
+            return box.width > 0 && box.height > 0 && box.top >= 0 &&
+                   box.top < 120 && box.left > innerWidth * 0.35;
+          })""", arg=recipient, timeout=timeout)
+
+
 def prepare_snap(page, config):
     from playwright.sync_api import TimeoutError as PlaywrightTimeout
     conversation_id = config["conversation_id"]
@@ -212,10 +228,7 @@ def prepare_snap(page, config):
         step = "waiting for the signed-in chat"
         page.get_by_role("button", name="Close Chat", exact=True).wait_for(timeout=60000)
         step = "checking the recipient"
-        name = page.locator(f'[id="title-{conversation_id}"]')
-        name.wait_for()
-        if name.inner_text().strip() != config["recipient"]:
-            raise SenderError("The conversation name does not match. No Snap was sent.")
+        wait_for_recipient(page, conversation_id, config["recipient"])
         LOG.info("Capturing the generated image as a camera Snap.")
         step = "opening the camera"
         # Snapchat's icon and capture ID survive CSS class changes.

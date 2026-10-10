@@ -9,12 +9,33 @@ from contextlib import nullcontext, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
 
 import snapchat_web
 
 
 class DeliveryTests(unittest.TestCase):
+    def test_recipient_check_uses_open_chat_header_when_sidebar_row_is_missing(self):
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(channel="chrome", headless=True)
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 1000})
+                page.route("**/*", lambda route: route.fulfill(body="""
+                  <div style="position:absolute;left:510px;top:0;height:90px;width:900px">
+                    <span>The Chicken Nugget Council</span>
+                  </div>
+                  <div style="position:absolute;left:0;top:200px;width:400px">
+                    <span id="title-other">Other Friend</span>
+                  </div>""", content_type="text/html"))
+                page.goto("https://www.snapchat.com/web/group-id")
+                snapchat_web.wait_for_recipient(page, "group-id", "The Chicken Nugget Council", 500)
+                with self.assertRaises(PlaywrightTimeout):
+                    snapchat_web.wait_for_recipient(page, "group-id", "Other Friend", 500)
+                with self.assertRaises(snapchat_web.SenderError):
+                    snapchat_web.wait_for_recipient(page, "wrong-id", "The Chicken Nugget Council", 500)
+            finally:
+                browser.close()
+
     def check_send(self, group=False):
         with tempfile.TemporaryDirectory() as temporary, sync_playwright() as playwright:
             launch = playwright.chromium.launch_persistent_context
