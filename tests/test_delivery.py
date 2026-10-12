@@ -36,7 +36,7 @@ class DeliveryTests(unittest.TestCase):
             finally:
                 browser.close()
 
-    def check_send(self, group=False):
+    def check_send(self, group=False, toast=True):
         with tempfile.TemporaryDirectory() as temporary, sync_playwright() as playwright:
             launch = playwright.chromium.launch_persistent_context
 
@@ -76,7 +76,7 @@ class DeliveryTests(unittest.TestCase):
                                           {method: 'POST'});
                               document.getElementById('close').hidden = true;
                               document.getElementById('status-test').textContent = GROUP ? 'New Chat' : 'Delivered';
-                              if (GROUP) {
+                              if (TOAST) {
                                 const toast = document.createElement('div');
                                 toast.textContent = 'Snap sent!';
                                 document.body.appendChild(toast);
@@ -84,7 +84,8 @@ class DeliveryTests(unittest.TestCase):
                               document.querySelector('time').dateTime = new Date().toISOString();
                             }
                           </script>
-                        """.replace("GROUP", "true" if group else "false"))
+                        """.replace("GROUP", "true" if group else "false").replace(
+                            "TOAST", "true" if toast else "false"))
 
                 context.route("**/*", serve)
                 return context
@@ -112,6 +113,9 @@ class DeliveryTests(unittest.TestCase):
 
     def test_group_snap_confirmation_still_waits_for_media_upload(self):
         self.check_send(group=True)
+
+    def test_new_incoming_snap_does_not_hide_success(self):
+        self.check_send(group=True, toast=False)
 
     def check_verification(self, name="Test Friend", timestamp="2026-09-29T09:00:01Z", confirmed=True):
         settings = types.ModuleType("settings")
@@ -159,6 +163,23 @@ class DeliveryTests(unittest.TestCase):
                 main, "send_all", return_value=0) as send:
             main.run_command("manual-send", ["Test Friend"])
             send.assert_called_once_with(manual=True, friends=[("Test Friend", "test")])
+
+    def test_old_uncertain_attempt_is_retried_after_interval(self):
+        settings = types.ModuleType("settings")
+        settings.HEADLESS, settings.HOURS = True, 22
+        spec = importlib.util.spec_from_file_location("sender_retry_test", snapchat_web.ROOT / "main.py")
+        main = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {"settings": settings}):
+            spec.loader.exec_module(main)
+        with tempfile.TemporaryDirectory() as temporary, patch.object(main, "RUNTIME", Path(temporary)):
+            started = "2026-09-29T09:00:00+00:00"
+            snapchat_web.save_json(main.file_for("test"), {"pending_send": {"started_at": started}})
+            with patch.object(main, "run_browser", return_value=None) as send, redirect_stdout(io.StringIO()):
+                self.assertEqual(main.send_all(friends=[("Test Friend", "test")]), 0)
+            send.assert_called_once()
+            state = snapchat_web.load_json(main.file_for("test"))
+            self.assertEqual(state["last_sent_at"], started)
+            self.assertNotIn("pending_send", state)
 
 
 if __name__ == "__main__":

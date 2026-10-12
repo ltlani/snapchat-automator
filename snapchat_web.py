@@ -9,6 +9,7 @@ import ipaddress
 import logging
 import os
 from pathlib import Path
+import socket
 import sys
 import time
 from urllib.parse import urlsplit
@@ -120,6 +121,62 @@ def run_lock():
                 msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
             else:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def clear_stale_chrome_lock(profile):
+    """Remove only a dead Chrome instance's profile lock, never its login data."""
+    if not sys.platform.startswith("linux"):
+        return
+    lock = profile / "SingletonLock"
+    if not lock.is_symlink():
+        return
+    target = os.readlink(lock)
+    host, separator, pid_text = target.rpartition("-")
+    if not separator or not pid_text.isdigit():
+        return
+    if host == socket.gethostname():
+        try:
+            pid = int(pid_text)
+            os.kill(pid, 0)
+            process = Path(f"/proc/{pid}")
+            status = process.joinpath("stat").read_text(encoding="utf-8")
+            if status.split(") ", 1)[1][:1] != "Z":
+                command = process.joinpath("cmdline").read_bytes().replace(b"\0", b" ")
+                if b"chrome" in command.lower() and os.fsencode(str(profile)) in command:
+                    return
+        except PermissionError:
+            return
+        except ProcessLookupError:
+            pass
+        except (OSError, IndexError):
+            return
+    for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        path = profile / name
+        if path.is_symlink():
+            path.unlink()
+
+
+def reap_exited_children():
+    """Python is PID 1 in the container, so it must reap orphaned Chrome children."""
+    if not sys.platform.startswith("linux") or os.getpid() != 1:
+        return
+    while True:
+        try:
+            pid, _ = os.waitpid(-1, os.WNOHANG)
+        except ChildProcessError:
+            return
+        if pid == 0:
+            return
+
+
+@contextmanager
+def managed_playwright():
+    from playwright.sync_api import sync_playwright
+    try:
+        with sync_playwright() as playwright:
+            yield playwright
+    finally:
+        reap_exited_children()
 
 
 def image_data(config):
@@ -356,22 +413,28 @@ def scan_chats(page):
 
 
 def run_browser(config, command, state):
-    from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
     if command == "login":
         show_login_instructions()
     profile = RUNTIME / "chrome-profile"
-    with sync_playwright() as playwright:
+    clear_stale_chrome_lock(profile)
+    reap_exited_children()
+    with managed_playwright() as playwright:
         headless = command != "login" and config.get("headless", True)
         user_agent = config.get("user_agent") or (chrome_user_agent(playwright) if headless else None)
         browser_args = ["--use-fake-device-for-media-stream"]
         if sys.platform.startswith("linux"):
             browser_args.append("--disable-dev-shm-usage")
-        context = playwright.chromium.launch_persistent_context(
-            str(profile), channel="chrome", headless=headless,
-            viewport={"width": 1440, "height": 1000}, locale="en-US",
-            user_agent=user_agent,
-            args=browser_args,
-        )
+        try:
+            context = playwright.chromium.launch_persistent_context(
+                str(profile), channel="chrome", headless=headless,
+                viewport={"width": 1440, "height": 1000}, locale="en-US",
+                user_agent=user_agent,
+                args=browser_args,
+            )
+        except Exception as error:
+            (RUNTIME / "last-browser-error.txt").write_text(str(error), encoding="utf-8")
+            raise
         try:
             context.grant_permissions(["camera"], origin="https://www.snapchat.com")
             if command not in ("login", "verify", "discover"):
@@ -415,6 +478,7 @@ def run_browser(config, command, state):
             state["pending_send"] = {"started_at": datetime.now(timezone.utc).isoformat()}
             save_json(config["state_file"], state)
             try:
+                upload_start = len(events)
                 with page.expect_response(lambda r: urlsplit(r.url).path ==
                         "/messagingcoreservice.MessagingCoreService/CreateContentMessage"
                         and r.request.method == "POST", timeout=60000) as publish:
@@ -426,23 +490,9 @@ def run_browser(config, command, state):
                         event["grpc_status"] = grpc_status
                 if response.status != 200 or grpc_status != "0":
                     raise SenderError("Snapchat did not confirm the message RPC.")
-                page.get_by_role("button", name="Close snap preview and return to camera.",
-                                 exact=True).wait_for(state="hidden", timeout=60000)
-                native_confirmation = page.get_by_text("Snap sent!", exact=True).is_visible()
-                page.wait_for_function(r"""({id, started, confirmed}) => {
-                  if (confirmed) return true;
-                  const title = document.getElementById('title-' + id);
-                  const row = title?.closest('[role="button"]');
-                  const visible = row?.innerText?.slice(title?.innerText?.length || 0).split('\n').map(s => s.trim());
-                  const status = visible?.find(s => /^(Delivered|Opened)$/.test(s)) ||
-                                 document.getElementById('status-' + id)?.textContent;
-                  const timestamp = row?.querySelector('time')?.getAttribute('datetime');
-                  return /Delivered|Opened/.test(status || '') && timestamp &&
-                         Date.parse(timestamp) >= started - 5000;
-                }""", arg={"id": config["conversation_id"], "confirmed": native_confirmation, "started":
-                           datetime.fromisoformat(state["pending_send"]["started_at"]).timestamp() * 1000}, timeout=90000)
                 deadline = time.monotonic() + 60
-                while not any(x.get("media_upload") and 200 <= x["http_status"] < 300 for x in events):
+                while not any(x.get("media_upload") and 200 <= x["http_status"] < 300
+                              for x in events[upload_start:]):
                     if time.monotonic() >= deadline:
                         raise SenderError("No successful media upload was observed.")
                     page.wait_for_timeout(250)

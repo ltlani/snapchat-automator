@@ -2,7 +2,7 @@ import sys
 import shlex
 import time
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from queue import Empty, Queue
 from threading import Thread
 
@@ -61,12 +61,20 @@ def show_status():
         print("No active Streaks found in the last check. Type streaks to check again.")
     for name, friend_id in friends:
         state = load_json(file_for(friend_id))
-        if state.get("pending_send"):
+        if state.get("pending_send") and not pending_expired(state):
             message = "needs checking before another send"
         else:
             hours = seconds_until_due(state, HOURS) / 3600
             message = "due now" if hours == 0 else f"due in {hours:.1f} hours"
         print(f"{name}: {message}")
+
+
+def pending_expired(state):
+    pending = state.get("pending_send")
+    if not pending:
+        return False
+    started = datetime.fromisoformat(pending["started_at"])
+    return (datetime.now(timezone.utc).timestamp() - started.timestamp()) >= HOURS * 3600
 
 
 def verify_deliveries(friends=None):
@@ -109,9 +117,16 @@ def send_all(manual=False, friends=None):
     for name, friend_id in (streak_friends(known_chats()) if friends is None else friends):
         state = load_json(file_for(friend_id))
         if state.get("pending_send"):
-            note(f"{name}: previous result is uncertain; check Snapchat first")
-            failed = True
-            continue
+            if not pending_expired(state):
+                note(f"{name}: previous result is uncertain; check Snapchat first")
+                failed = True
+                continue
+            pending = state.pop("pending_send")
+            started = pending["started_at"]
+            if not state.get("last_sent_at") or datetime.fromisoformat(started) > datetime.fromisoformat(state["last_sent_at"]):
+                state["last_sent_at"] = started
+            save_json(file_for(friend_id), state)
+            note(f"{name}: prior attempt is over {HOURS} hours old; sending again")
         if not manual and seconds_until_due(state, HOURS) > 0:
             continue
         note(f"Sending to {name}...")
@@ -196,17 +211,27 @@ def run_forever():
     note(f"Snapchat sender ready. Checking Streaks every 10 minutes; each chat is due every {HOURS} hours.")
     print('Console commands: login, streaks, status, preview "Friend Name", manual-send, verify, resolve "Friend Name" sent|not-sent, stop', flush=True)
     next_check = time.monotonic() + 600
+    last_check_error = None
 
     while True:
         try:
             line = commands.get(timeout=max(0, next_check - time.monotonic()))
         except Empty:
             try:
-                run_command("send", [])
+                result = run_command("send", [])
+                if not result and last_check_error:
+                    note("Automatic checks recovered.")
+                    last_check_error = None
             except SenderError as error:
-                note(f"Check skipped: {error}")
+                message = f"Check skipped: {error}"
+                if message != last_check_error:
+                    note(message)
+                last_check_error = message
             except Exception as error:
-                note(f"Check failed ({type(error).__name__}): {error_detail(error)}")
+                message = f"Check failed ({type(error).__name__}): {error_detail(error)}"
+                if message != last_check_error:
+                    note(message)
+                last_check_error = message
             next_check = time.monotonic() + 600
             continue
 

@@ -4,6 +4,8 @@ Sends a plain black Snap to your active 🔥 Streak chats every 22 hours. It che
 
 Start the server and type `login` in the console to sign in to Snapchat. Your login is saved between restarts. If Snapchat signs you out later, type `login` again.
 
+The sender checks that Snapchat accepted the Snap and its image upload. If a send is interrupted, it waits before trying that chat again, so it won't spam someone. It will retry once 22 hours have passed.
+
 Useful console commands:
 
 - `streaks` — see who it found.
@@ -11,6 +13,6 @@ Useful console commands:
 - `preview "Friend Name"` — check the Snap without sending.
 - `manual-send` — send to all current Streak chats now.
 - `manual-send "Friend Name"` — send to one chat, even without a Streak.
-- `verify` — check sends that weren't confirmed.
+- `verify` — check a send you're unsure about.
 
 You can change the 22-hour timing in `settings.py`. The `deploy/example.conf` file is a sample; keep your real server config private.
